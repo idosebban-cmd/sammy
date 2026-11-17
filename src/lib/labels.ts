@@ -84,14 +84,19 @@ export const SECTION_HINTS: Record<ProfileSection, string> = {
 };
 
 export const PROGRESS_LABELS: Record<ProgressArea, string> = {
-  recognising_emotions: "Recognising & communicating emotions",
-  accepting_support: "Accepting adult support",
-  recovering: "Recovering from dysregulation",
-  managing_anxiety: "Managing anxiety & frustration",
+  emotional_regulation: "Emotional regulation",
+  recovering: "Recovery after dysregulation",
+  anxiety_confidence: "Anxiety & confidence",
   social: "Social interactions & friendships",
-  classroom_engagement: "Classroom engagement",
-  confidence: "Confidence & self-esteem",
+  learning: "Learning & classroom participation",
+  independence: "Independence",
+  wellbeing: "Self-esteem & wellbeing",
 };
+
+/** Labels for any older area keys that might still be stored. */
+export function progressLabel(area: string): string {
+  return (PROGRESS_LABELS as Record<string, string>)[area] ?? area.replace(/_/g, " ");
+}
 
 export const DOC_CATEGORY_LABELS: Record<DocCategory, string> = {
   ehcp: "EHCP",
@@ -106,9 +111,46 @@ export const DOC_CATEGORY_LABELS: Record<DocCategory, string> = {
 };
 
 export const EFFECT_LABELS = {
-  seems_helpful: "Seems helpful",
-  unclear: "Unclear so far",
-  not_helpful: "Doesn't seem helpful",
+  seems_helpful: "Seems to help",
+  mixed: "Mixed",
+  no_clear_effect: "No clear effect",
+  seems_worse: "Seems to make things harder",
+  unclear: "Too early to tell",
+} as const;
+
+export const EFFECT_STYLES: Record<keyof typeof EFFECT_LABELS, string> = {
+  seems_helpful: "bg-emerald-50 text-emerald-800",
+  mixed: "bg-amber-50 text-amber-800",
+  no_clear_effect: "bg-stone-100 text-stone-600",
+  seems_worse: "bg-rose-50 text-rose-800",
+  unclear: "bg-sky-50 text-sky-800",
+};
+
+export const COMMITMENT_KIND_LABELS = {
+  ehcp_provision: "EHCP provision",
+  professional_recommendation: "Professional recommendation",
+  professional_commitment: "Commitment",
+  school_arrangement: "School arrangement",
+} as const;
+
+export const CERTAINTY_LABELS = {
+  confirmed: "Confirmed",
+  proposed: "Proposed",
+  reported: "Reported",
+} as const;
+
+export const CERTAINTY_HINTS = {
+  confirmed: "In a final plan or agreed",
+  proposed: "Draft or suggested change, not yet agreed",
+  reported: "Someone says it is happening or will happen",
+} as const;
+
+export const DELIVERY_LABELS = {
+  unknown: "Not known",
+  in_place: "In place",
+  partially_delivered: "Partly in place",
+  not_delivered: "Not in place",
+  ended: "Ended",
 } as const;
 
 export const INTERVENTION_STATUS_LABELS = {

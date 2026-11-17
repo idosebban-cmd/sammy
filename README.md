@@ -4,7 +4,18 @@ A private web app for Ido and Helen to understand and support their son: one pla
 
 **The core loop:** add information → receive useful analysis → confirm what to save → track actions and progress.
 
-## What's in this version (Phase 1)
+## What's new in Phase 1.5
+
+- **Personalised AI.** Every analysis and answer reads Sammy's whole structured record, not a few search hits. That covers background, profile, provision and recommendations (with what has followed them up), interventions and what was observed, 18 months of timeline, actions and appointments, recent emails and documents. Documents the request refers to are read in full. Analyses explain *why* each recorded fact matters.
+- **Five-part analysis:** *What happened · Understanding · What we can do (plus questions for school) · Follow-ups · Progress*. Short observations get a brief version.
+- **Interventions linked to outcomes.** Each intervention records the change, then what happened afterwards, then an assessment. Analyses propose observations against existing interventions, with a reminder of how much evidence there is ("observation 2 — too early to judge"). There's an on-demand AI progress review that says how strong the evidence is for each intervention and never claims cause.
+- **Reliable follow-ups.** Tasks and appointments (with times). Dates can come from relative phrases: "next Friday" is worked out with a calendar, "before half-term" with your school calendar. Worked-out dates stay flagged "date to confirm" until confirmed. Also new: how long you've been waiting for a reply, completion outcomes, and optional **email reminders** (one daily digest at most, no personal details by default).
+- **Documents.** Scanned PDFs are read page by page with AI. A **Provision & recommendations** register records whether each item is confirmed, proposed or reported, whether it's happening, and which actions and interventions follow it up. It also answers "what hasn't been followed up?".
+- **Everyday use.** A "How was Sammy's day?" box on the dashboard. The Add page works out whether you pasted an email, wrote an observation or asked a question, and unsent drafts are kept. Saving a review is atomic: all or nothing. The dashboard surfaces dates to confirm and replies you've waited 7+ days for. The assistant suggests follow-up questions.
+- **AI behaviour.** Refusals are shown clearly and are never retried on another model. The server-side model fallback has been removed. Technical failures get controlled retries: the SDK's backoff, plus one retry for an unreadable response.
+- **Fixes.** A member could change the `workspace_id` on their own membership row, which would let them join another workspace. Only the display name is now editable. A "Delete everything" option has been added.
+
+## What's in the app
 
 | Area | What works |
 |---|---|
@@ -61,7 +72,7 @@ The Edge Functions act **as the signed-in parent** (they forward the user's JWT)
   - Suggested actions are shown as "Suggestion — not agreed with anyone". Only stated commitments are marked as commitments.
   - AI inferences saved to the profile stay labelled *AI hypothesis* unless a parent deliberately changes them.
 - **Safety.** The prompt prioritises immediate safety and points to the safeguarding lead, NHS 111 or 999. The UI shows a safety banner when one is flagged. The assistant never diagnoses.
-- **Model.** `claude-opus-5-5` by default (stored in `ai_settings.model`). Analysis uses `effort: high`, chat uses `medium`. Server-side refusal fallback (`fallbacks: "default"`) is on, so a declined request on a sensitive but legitimate topic is retried on a fallback model.
+- **Model.** `claude-opus-5-5` by default (stored in `ai_settings.model`). Analysis uses `effort: high`, chat uses `medium`. Responses are streamed. If the model declines a request, the parent sees a clear "declined" message; it is never rerouted to another model.
 
 ## Setup
 
@@ -81,7 +92,7 @@ The Edge Functions act **as the signed-in parent** (they forward the user's JWT)
    It prints a temporary password for each parent. Change them in Settings after signing in.
 4. **Deploy the Edge Functions and set the AI key** (the key never goes to the browser):
    ```bash
-   npx supabase secrets set ANTHROPIC_API_KEY=sk-ant-... APP_ORIGIN=https://your-app-domain
+   npx supabase secrets set ANTHROPIC_API_KEY=sk-ant-... APP_ORIGIN=https://your-app-domain APP_URL=https://your-app-domain
    ```
    ```bash
    npx supabase functions deploy analyze
@@ -89,7 +100,28 @@ The Edge Functions act **as the signed-in parent** (they forward the user's JWT)
    ```bash
    npx supabase functions deploy assistant
    ```
-5. **Run the web app:**
+   ```bash
+   npx supabase functions deploy transcribe
+   ```
+   ```bash
+   npx supabase functions deploy reminders --no-verify-jwt
+   ```
+   `reminders` authenticates its own callers: the daily job uses a shared secret, and preview/test calls use the parent's session.
+5. **Email reminders (optional).** Create a [Resend](https://resend.com) account with a verified sending domain, then:
+   ```bash
+   npx supabase secrets set RESEND_API_KEY=re_... REMINDER_FROM="Sammy <reminders@your-domain>" CRON_SECRET=a-long-random-string
+   ```
+   Schedule a daily run in the SQL editor. It needs the `pg_cron` and `pg_net` extensions (Database → Extensions):
+   ```sql
+   select cron.schedule('sammy-reminders', '30 6 * * *', $$
+     select net.http_post(
+       url := 'https://YOUR_PROJECT_REF.supabase.co/functions/v1/reminders',
+       headers := jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', 'SAME-CRON-SECRET'),
+       body := '{}'::jsonb);
+   $$);
+   ```
+   Each parent then switches reminders on in Settings, where they can preview today's email or send a test.
+6. **Run the web app:**
    ```bash
    cp .env.example .env.local
    ```
@@ -101,7 +133,18 @@ The Edge Functions act **as the signed-in parent** (they forward the user's JWT)
    npm run dev
    ```
    For production, `npm run build` and host `dist/` on any static host (e.g. Netlify or Vercel, EU region). Configure an SPA fallback to `index.html`, and set the site URL in Supabase Auth settings.
-6. **Sign in, open Settings, read the provider terms, and switch on AI** when you're ready.
+7. **Sign in, open Settings, read the provider terms, and switch on AI** when you're ready.
+
+## Backups and recovery
+
+- **Your own copy:** Settings → *Export everything* downloads every record as JSON. Do this regularly (e.g. monthly) and keep it somewhere private. Original documents are separate files; download important ones from their document page.
+- **Supabase backups:** paid Supabase plans take daily database backups (and offer point-in-time recovery as an add-on); check what your plan includes under *Database → Backups*. Storage files (the original documents) are not part of database backups.
+- **Developer backup:**
+  ```bash
+  npx supabase db dump --data-only -f sammy-backup.sql
+  ```
+- **Recovery from mistakes:** every edit and deletion is in the change history (Settings), including the full earlier version, so individual records can be reconstructed from it.
+- **Nothing is lost on AI errors:** submissions are saved before analysis, a failed or refused analysis leaves the original intact, and saving a review is a single transaction.
 
 ## Privacy and security notes
 
@@ -114,13 +157,34 @@ The Edge Functions act **as the signed-in parent** (they forward the user's JWT)
 
 ## Testing
 
+### Real-AI evaluation
+
+`scripts/ai-eval/run.mjs` evaluates the real model end to end with **synthetic data only**. It covers:
+- the collective-worship incident email
+- a short positive observation
+- an email that contradicts the record
+- relative dates ("next Friday", "before half-term", "within two weeks")
+- a draft EHCP amendments document
+- six assistant questions: EHCP adult support, unfollowed EP recommendations, the October meeting commitments, comparing EHCP versions, a question about a document that doesn't exist, and practical advice
+- a progress review
+- error handling
+
+It checks structure, citation validity, redaction, date sourcing, use of context and appropriate caution, and writes a Markdown report with every output in full.
+
+Run it against a **separate test project** (or `supabase start`), with a test parent account in an empty workspace and `ANTHROPIC_API_KEY` set as a function secret:
+```bash
+SUPABASE_URL=... SUPABASE_ANON_KEY=... EVAL_EMAIL=test-parent@example.com EVAL_PASSWORD=... npm run eval:ai -- --accept-ai-terms
+```
+
+### Other checks
+
 ```bash
 npm run build
 ```
 ```bash
 npm run test:functions
 ```
-The second command runs the Deno unit tests for redaction and AI output validation. It needs Deno installed.
+The second command runs the Deno unit tests (redaction, AI output validation, deadline sourcing, document matching and reminder scheduling). It needs Deno installed.
 
 `supabase/tests/rls_test.sql` is a manual row-level-security check: two parents share data, and a third account sees and can write nothing.
 

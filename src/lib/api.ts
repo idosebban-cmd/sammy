@@ -1,6 +1,6 @@
 import { FunctionsHttpError } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
-import type { Analysis, ChatMessage } from "./types";
+import type { Analysis, ChatMessage, ProgressReview } from "./types";
 
 export class ApiError extends Error {
   constructor(message: string, public code?: string, public status?: number) {
@@ -31,4 +31,28 @@ export function analyseEntry(entryId: string) {
 
 export function askAssistant(message: string, threadId: string | null) {
   return invoke<{ thread_id: string; message: ChatMessage }>("assistant", { message, thread_id: threadId });
+}
+
+export function requestProgressReview(days = 90) {
+  return invoke<{ review: ProgressReview }>("assistant", { mode: "progress_review", days });
+}
+
+export function transcribePages(documentId: string, pages: number[]) {
+  return invoke<{ pages: number[]; transcribed: number[]; chunks: number; total_pages: number }>("transcribe", { document_id: documentId, pages });
+}
+
+export interface ReminderPreview {
+  sent: boolean;
+  to: string | null;
+  items: { action_id: string; reason: string; label: string; title: string }[];
+  email?: { subject: string; text: string };
+  message?: string;
+}
+
+export function previewReminders() {
+  return invoke<ReminderPreview>("reminders", { mode: "preview" });
+}
+
+export function sendTestReminder() {
+  return invoke<ReminderPreview>("reminders", { mode: "test" });
 }

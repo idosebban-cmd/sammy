@@ -30,3 +30,6 @@ dist-ssr
 supabase/.temp
 supabase/.branches
 supabase/functions/.env
+
+# AI evaluation reports (may contain synthetic test output)
+scripts/ai-eval/reports/

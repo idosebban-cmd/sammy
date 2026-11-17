@@ -80,6 +80,8 @@ async function extractPdf(file: File): Promise<ExtractionResult> {
     }
     // Rebuild paragraphs: blank lines where line gaps were.
     const cleaned = text.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+    // Pages with almost no text are usually scanned images; leave them for transcription.
+    if (cleaned.replace(/\s/g, "").length < 40) continue;
     for (const piece of splitLong(cleaned)) {
       chunks.push({ chunk_index: chunks.length, page: p, section: null, content: piece });
     }

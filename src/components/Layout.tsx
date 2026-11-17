@@ -36,7 +36,8 @@ export function Layout() {
   const [drawerThread, setDrawerThread] = useState<string | null>(null);
   const attention = useAttentionCount();
   const location = useLocation();
-  const onAsk = location.pathname.startsWith("/ask");
+  // Hidden on the assistant page itself, and on review pages where it would cover the Save bar.
+  const onAsk = location.pathname.startsWith("/ask") || location.pathname.startsWith("/entries/");
 
   useEffect(() => { setDrawer(false); }, [location.pathname]);
 

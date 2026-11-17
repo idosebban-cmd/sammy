@@ -30,3 +30,12 @@ verify_jwt = true
 
 [functions.assistant]
 verify_jwt = true
+
+[functions.transcribe]
+verify_jwt = true
+
+# The daily scheduled run authenticates with the CRON_SECRET header instead of a
+# user session; manual "preview/test" calls are checked against the user's session
+# inside the function.
+[functions.reminders]
+verify_jwt = false

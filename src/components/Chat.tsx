@@ -11,9 +11,11 @@ import { ErrorNote, Spinner } from "./ui";
 
 export const EXAMPLE_QUESTIONS = [
   "What has helped in similar situations?",
-  "What actions are still outstanding?",
+  "What's still outstanding, and who's it waiting on?",
   "What does his EHCP say about adult support?",
   "How can we support his anxiety and self-esteem?",
+  "Which recommendations haven't been followed up?",
+  "What should we ask at the next review?",
 ];
 
 const EVIDENCE_TEXT = {
@@ -44,6 +46,7 @@ export function Chat({ threadId, onThread, initialQuestion, onNavigate, compact 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refusal, setRefusal] = useState<string | null>(null);
   const [loadingThread, setLoadingThread] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
   const sentInitial = useRef<string | null>(null);
@@ -75,6 +78,7 @@ export function Chat({ threadId, onThread, initialQuestion, onNavigate, compact 
     if (!q || sending) return;
     setSending(true);
     setError(null);
+    setRefusal(null);
     setInput("");
     const optimistic: ChatMessage = { id: `local-${Date.now()}`, role: "user", content: q, citations: [], meta: {}, created_at: new Date().toISOString() };
     setMessages((m) => [...m, optimistic]);
@@ -86,7 +90,8 @@ export function Chat({ threadId, onThread, initialQuestion, onNavigate, compact 
       }
       setMessages((m) => [...m, res.message]);
     } catch (e) {
-      setError(e instanceof ApiError || e instanceof Error ? e.message : String(e));
+      if (e instanceof ApiError && e.code === "ai_refusal") setRefusal(e.message);
+      else setError(e instanceof ApiError || e instanceof Error ? e.message : String(e));
       setMessages((m) => m.filter((x) => x.id !== optimistic.id));
       setInput(q);
     } finally {
@@ -133,13 +138,26 @@ export function Chat({ threadId, onThread, initialQuestion, onNavigate, compact 
             </div>
             {m.meta?.evidence_level && (
               <p className={`mt-1 px-1 text-[11px] ${m.meta.evidence_level === "insufficient" ? "text-amber-700" : "text-stone-400"}`}>
-                {EVIDENCE_TEXT[m.meta.evidence_level]} · AI-generated, not professional advice
+                {EVIDENCE_TEXT[m.meta.evidence_level]}{m.meta.documents_consulted?.length ? ` · read in full: ${m.meta.documents_consulted.join(", ")}` : ""} · AI-generated, not professional advice
               </p>
+            )}
+            {m.id === messages[messages.length - 1]?.id && !sending && !!m.meta?.follow_up_questions?.length && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {m.meta.follow_up_questions.map((q) => (
+                  <button key={q} className="rounded-full border border-sand-300 bg-white px-3 py-1 text-left text-xs text-stone-700 hover:border-sage-400" onClick={() => send(q)}>{q}</button>
+                ))}
+              </div>
             )}
           </div>
         ))}
         {sending && (
           <div className="flex items-center gap-2 text-sm text-stone-500"><Spinner className="h-4 w-4" /> Looking through Sammy's records…</div>
+        )}
+        {refusal && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900" role="alert">
+            <p className="font-medium">The AI declined to answer that</p>
+            <p className="mt-1">{refusal}</p>
+          </div>
         )}
         {error && <ErrorNote message={error} />}
         <div ref={endRef} />

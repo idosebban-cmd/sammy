@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Icon } from "../components/Icon";
 import { ErrorNote, Field, Loading, Modal, Select, Spinner } from "../components/ui";
-import { deleteDocument, openOriginal } from "../lib/data";
+import { deleteDocument, missingPages, openOriginal } from "../lib/data";
+import { ApiError, transcribePages } from "../lib/api";
 import { formatDate, formatDateTime } from "../lib/dates";
 import { notifyChanged } from "../lib/events";
 import { extractText } from "../lib/extract";
@@ -53,7 +54,8 @@ export default function DocumentPage() {
     for (let i = 0; i < fresh.length; i += 200) {
       must(await supabase.from("document_chunks").insert(fresh.slice(i, i + 200).map((c) => ({ ...c, workspace_id: wsId, document_id: doc.id }))));
     }
-    must(await supabase.from("documents").update({ extraction_status: fresh.length ? "done" : "empty", page_count: pageCount }).eq("id", doc.id));
+    const withText = new Set(fresh.map((c) => c.page).filter(Boolean)).size;
+    must(await supabase.from("documents").update({ extraction_status: !fresh.length ? "empty" : pageCount && withText < pageCount ? "partial" : "done", page_count: pageCount }).eq("id", doc.id));
     await reload();
   });
 
@@ -97,17 +99,21 @@ export default function DocumentPage() {
       <div className="flex flex-wrap gap-2">
         {aiEnabled && doc.extraction_status === "done" && <button className="btn-secondary btn-sm" onClick={analyse}><Icon name="sparkles" className="h-3.5 w-3.5" />Analyse this document</button>}
         {aiEnabled && <Link className="btn-secondary btn-sm" to={`/ask?q=${encodeURIComponent(`Summarise the key points of "${doc.title}" that matter for Sammy.`)}`}><Icon name="chat" className="h-3.5 w-3.5" />Ask about it</Link>}
-        {doc.extraction_status !== "done" && <button className="btn-secondary btn-sm" onClick={reread}>Try reading the text again</button>}
+        {doc.extraction_status === "failed" && <button className="btn-secondary btn-sm" onClick={reread}>Try reading the text again</button>}
         {entries.map((e) => (
           <Link key={e.id} to={`/entries/${e.id}`} className="btn-ghost btn-sm">Analysis from {formatDate(e.created_at)}{e.review_status === "unreviewed" && e.analysis_status === "done" ? " · needs review" : ""}</Link>
         ))}
       </div>
 
+      {doc.mime_type === "application/pdf" && doc.extraction_status !== "done" && doc.extraction_status !== "pending" && (
+        <ScannedPanel doc={doc} onDone={reload} />
+      )}
+
       <section className="card p-4 sm:p-5">
         <h2 className="section-title mb-1">Extracted text</h2>
         <p className="mb-4 text-xs text-stone-500">Read automatically from the original for searching. Formatting may differ; the original file is the authoritative version.</p>
         {doc.extraction_status === "failed" && <ErrorNote message="The text couldn't be read from this file. The original is still stored safely." />}
-        {doc.extraction_status === "empty" && <p className="text-sm text-amber-800">No text was found. This is usually a scanned document; it can still be opened, but can't yet be searched.</p>}
+        {doc.text_source !== "extracted" && <p className="mb-3 text-xs text-stone-500">Some pages were scanned images and were read by AI. Check important wording against the original.</p>}
         <div className="space-y-3">
           {chunks.map((c) => {
             const loc = c.page ? `Page ${c.page}` : c.section ?? "";
@@ -162,5 +168,63 @@ function EditDoc({ open, doc, onClose, onSaved }: { open: boolean; doc: Document
         <Field label="Notes"><textarea className="input" value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
       </div>
     </Modal>
+  );
+}
+
+/** Reads scanned (image-only) pages with AI, a few pages at a time. */
+function ScannedPanel({ doc, onDone }: { doc: DocumentRow; onDone: () => void }) {
+  const { aiEnabled } = useWs();
+  const [missing, setMissing] = useState<number[] | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => { void missingPages(doc).then(setMissing, (e) => setError(String(e.message ?? e))); }, [doc]);
+
+  const run = async () => {
+    if (!missing?.length) return;
+    setError(null);
+    const batches: number[][] = [];
+    for (let i = 0; i < missing.length; i += 4) batches.push(missing.slice(i, i + 4));
+    setProgress({ done: 0, total: missing.length });
+    try {
+      let done = 0;
+      for (const b of batches) {
+        await transcribePages(doc.id, b);
+        done += b.length;
+        setProgress({ done, total: missing.length });
+      }
+      const left = await missingPages(doc);
+      must(await supabase.from("documents").update({
+        extraction_status: left.length ? "partial" : "done",
+        text_source: doc.extraction_status === "empty" ? "ai_transcribed" : "mixed",
+      }).eq("id", doc.id));
+      notifyChanged();
+      onDone();
+    } catch (e) {
+      setError(e instanceof ApiError || e instanceof Error ? e.message : String(e));
+    } finally {
+      setProgress(null);
+    }
+  };
+
+  if (!missing || (!missing.length && !error)) return null;
+  return (
+    <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+      <p className="font-medium">{missing.length === doc.page_count ? "This looks like a scanned document" : `${missing.length} page${missing.length === 1 ? " has" : "s have"} no readable text`}</p>
+      <p className="mt-1">
+        {missing.length === doc.page_count ? "Its text can't be searched or used in answers yet." : `Page${missing.length === 1 ? "" : "s"} ${missing.slice(0, 12).join(", ")}${missing.length > 12 ? "…" : ""} look like scanned images.`}
+        {aiEnabled ? " The AI can read the scanned pages so they become searchable. The original file isn't changed." : " Switch on AI in Settings to have the scanned pages read."}
+      </p>
+      {error && <div className="mt-2"><ErrorNote message={error} /></div>}
+      {aiEnabled && (
+        <div className="mt-3 flex items-center gap-3">
+          {progress ? (
+            <span className="flex items-center gap-2"><Spinner className="h-4 w-4" />Reading pages… {progress.done} of {progress.total}</span>
+          ) : (
+            <button className="btn-primary btn-sm" onClick={run}><Icon name="sparkles" className="h-3.5 w-3.5" />Read scanned pages</button>
+          )}
+        </div>
+      )}
+    </section>
   );
 }

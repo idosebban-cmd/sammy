@@ -10,6 +10,9 @@ export function sourceHref(s: SourceRef): string {
     case "intervention": return `/timeline?tab=interventions&focus=${s.id}`;
     case "document_chunk": return `/documents/${s.document_id}?chunk=${s.id}`;
     case "entry": return `/entries/${s.id}`;
+    case "commitment": return `/documents?tab=provision&focus=${s.id}`;
+    case "document": return `/documents/${s.id}`;
+    default: return "/";
   }
 }
 
@@ -20,6 +23,8 @@ const TYPE_LABEL: Record<SourceRef["type"], string> = {
   intervention: "Intervention",
   document_chunk: "Document",
   entry: "Record",
+  commitment: "Provision",
+  document: "Document",
 };
 
 export function SourceChip({ source, onNavigate }: { source: SourceRef; onNavigate?: () => void }) {

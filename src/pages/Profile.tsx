@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Spinner } from "../components/ui";
 import { Link, useSearchParams } from "react-router-dom";
 import { ProfileEditor } from "../components/forms";
 import { Icon } from "../components/Icon";
@@ -57,6 +58,7 @@ export default function ProfilePage() {
         subtitle="A living picture of who he is and what helps, built only from entries you've approved."
         actions={<button className="btn-primary" onClick={() => setAdding("strengths")}><Icon name="plus" className="h-4 w-4" />Add</button>}
       />
+      <AboutCard />
       <div className="mb-5 flex flex-wrap items-center gap-3">
         <Select className="!w-auto !py-1.5 text-xs" value={evidence} onChange={setEvidence} options={options(EVIDENCE_LABELS)} allowEmpty emptyLabel="All kinds of information" />
         <label className="flex items-center gap-2 text-xs text-stone-600">
@@ -110,5 +112,52 @@ export default function ProfilePage() {
       </div>
       <ProfileEditor open={!!adding || !!editing} entry={editing} section={adding ?? undefined} onClose={() => { setAdding(null); setEditing(null); }} />
     </div>
+  );
+}
+
+/** Free-text background the AI always reads: school, class, key adults, EHCP status, family context. */
+function AboutCard() {
+  const { wsId, workspace, refresh } = useWs();
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(workspace.about ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setText(workspace.about ?? ""); }, [workspace.about]);
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      must(await supabase.from("workspaces").update({ about: text.trim() || null }).eq("id", wsId));
+      await refresh();
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section className="card mb-5 p-4 sm:p-5">
+      <div className="mb-1 flex items-start justify-between gap-2">
+        <h2 className="section-title">Background</h2>
+        {!editing && <button className="btn-ghost btn-sm" onClick={() => setEditing(true)}><Icon name="edit" className="h-3.5 w-3.5" />{workspace.about ? "Edit" : "Write"}</button>}
+      </div>
+      <p className="mb-3 text-xs text-stone-500">The essentials the AI should always know: school and class, key adults (e.g. his 1:1), current support, EHCP status and upcoming reviews.</p>
+      {error && <div className="mb-2"><ErrorNote message={error} /></div>}
+      {editing ? (
+        <>
+          <textarea className="input min-h-[140px]" value={text} onChange={(e) => setText(e.target.value)}
+            placeholder={"e.g. Year 2 at a mainstream primary in London. Class teacher: Mrs Okafor. 1:1 support from Ms Blessing since October. EHCP finalised May 2026; annual review due February."} />
+          <div className="mt-2 flex justify-end gap-2">
+            <button className="btn-secondary btn-sm" onClick={() => { setEditing(false); setText(workspace.about ?? ""); }}>Cancel</button>
+            <button className="btn-primary btn-sm" onClick={save} disabled={busy}>{busy && <Spinner className="h-3.5 w-3.5" />}Save</button>
+          </div>
+        </>
+      ) : workspace.about ? (
+        <p className="whitespace-pre-wrap text-sm text-stone-700">{workspace.about}</p>
+      ) : (
+        <p className="text-sm italic text-stone-400">Not written yet. A few lines here noticeably improves the advice.</p>
+      )}
+    </section>
   );
 }

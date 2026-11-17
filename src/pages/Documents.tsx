@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { ProvisionRegister } from "../components/Provision";
 import { Icon } from "../components/Icon";
 import { Empty, ErrorNote, Field, Loading, Modal, PageHeader, Select, Spinner } from "../components/ui";
 import { uploadDocument } from "../lib/data";
@@ -24,6 +25,23 @@ function highlight(snippet: string, q: string) {
 }
 
 export default function DocumentsPage() {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "provision" ? "provision" : "library";
+  return (
+    <div className="mx-auto max-w-4xl">
+      <PageHeader title="Documents & provision" subtitle="EHCP, reports, letters and meeting notes, and what they commit to. Originals are stored unchanged; their text is indexed so you and the assistant can search it." />
+      <div className="mb-5 flex gap-1 rounded-xl bg-sand-100 p-1" role="tablist">
+        {([["library", "Library"], ["provision", "Provision & recommendations"]] as const).map(([t, label]) => (
+          <button key={t} role="tab" aria-selected={tab === t} onClick={() => setParams(t === "library" ? {} : { tab: t })}
+            className={`flex-1 rounded-lg px-3 py-1.5 text-sm font-medium ${tab === t ? "bg-white text-sage-800 shadow-soft" : "text-stone-600"}`}>{label}</button>
+        ))}
+      </div>
+      {tab === "library" ? <Library /> : <ProvisionRegister focus={params.get("focus")} />}
+    </div>
+  );
+}
+
+function Library() {
   const { wsId } = useWs();
   const [category, setCategory] = useState<DocCategory | "">("");
   const [q, setQ] = useState("");
@@ -51,9 +69,8 @@ export default function DocumentsPage() {
   const docs = (data ?? []).filter((d) => !category || d.category === category);
 
   return (
-    <div className="mx-auto max-w-4xl">
-      <PageHeader title="Documents" subtitle="EHCP, reports, letters and meeting notes. Originals are stored unchanged; their text is indexed so you and the assistant can search it."
-        actions={<button className="btn-primary" onClick={() => setUploading(true)}><Icon name="upload" className="h-4 w-4" />Upload</button>} />
+    <div>
+      <div className="mb-3 flex justify-end"><button className="btn-primary" onClick={() => setUploading(true)}><Icon name="upload" className="h-4 w-4" />Upload</button></div>
 
       <form onSubmit={search} className="mb-4 flex flex-wrap gap-2">
         <div className="relative min-w-[200px] flex-1">
@@ -99,7 +116,8 @@ export default function DocumentsPage() {
                   <p className="text-xs text-stone-500">
                     {DOC_CATEGORY_LABELS[d.category]}{d.doc_date && ` · ${formatDate(d.doc_date, { withYear: true })}`}{d.page_count ? ` · ${d.page_count} pages` : ""}
                     {d.extraction_status === "failed" && <span className="text-rose-700"> · text couldn't be read</span>}
-                    {d.extraction_status === "empty" && <span className="text-amber-700"> · no text found (scanned?)</span>}
+                    {d.extraction_status === "empty" && <span className="text-amber-700"> · scanned: needs reading</span>}
+                    {d.extraction_status === "partial" && <span className="text-amber-700"> · some scanned pages</span>}
                   </p>
                 </div>
                 <Icon name="chevronRight" className="h-4 w-4 text-stone-400" />
@@ -140,7 +158,7 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
     try {
       const doc = await uploadDocument(wsId, file, { title, doc_date: date || null, category }, setStage);
       notifyChanged();
-      if (aiEnabled && analyse && doc.extraction_status === "done") {
+      if (aiEnabled && analyse && (doc.extraction_status === "done" || doc.extraction_status === "partial")) {
         setStage("Preparing analysis…");
         const entry = must(await supabase.from("entries").insert({
           workspace_id: wsId, kind: "document", title: doc.title, raw_text: `Uploaded document: ${doc.title}`,
@@ -182,7 +200,7 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
         {aiEnabled && (
           <label className="flex items-center gap-2 text-sm text-stone-600">
             <input type="checkbox" className="h-4 w-4 rounded border-sand-400 text-sage-600" checked={analyse} onChange={(e) => setAnalyse(e.target.checked)} />
-            Analyse it and suggest actions and profile updates
+            Analyse it: find provisions, recommendations and follow-ups
           </label>
         )}
       </div>

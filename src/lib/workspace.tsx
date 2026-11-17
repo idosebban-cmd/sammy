@@ -58,7 +58,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         return;
       }
       const [ws, mem, settings] = await Promise.all([
-        supabase.from("workspaces").select("id, name, child_name").eq("id", mine.workspace_id).single(),
+        supabase.from("workspaces").select("id, name, child_name, about, school_calendar").eq("id", mine.workspace_id).single(),
         supabase.from("workspace_members").select("workspace_id, user_id, display_name").eq("workspace_id", mine.workspace_id),
         supabase.from("ai_settings").select("*").eq("workspace_id", mine.workspace_id).maybeSingle(),
       ]);

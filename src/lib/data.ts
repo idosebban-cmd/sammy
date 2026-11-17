@@ -60,8 +60,10 @@ export async function uploadDocument(
         chunks.slice(i, i + 200).map((c) => ({ ...c, workspace_id: wsId, document_id: id })),
       ));
     }
+    const pagesWithText = new Set(chunks.map((c) => c.page).filter(Boolean)).size;
+    const status = !chunks.length ? "empty" : pageCount && pagesWithText < pageCount ? "partial" : "done";
     doc = must(await supabase.from("documents")
-      .update({ extraction_status: chunks.length ? "done" : "empty", page_count: pageCount })
+      .update({ extraction_status: status, page_count: pageCount })
       .eq("id", id).select("*").single());
   } catch (e) {
     console.error(e);
@@ -116,4 +118,12 @@ export function downloadBlob(blob: Blob, filename: string) {
   a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Pages of a PDF that have no extracted text yet (e.g. scanned pages). */
+export async function missingPages(doc: Pick<DocumentRow, "id" | "page_count">): Promise<number[]> {
+  if (!doc.page_count) return [];
+  const rows = must(await supabase.from("document_chunks").select("page").eq("document_id", doc.id)) as { page: number | null }[];
+  const have = new Set(rows.map((r) => r.page));
+  return Array.from({ length: doc.page_count }, (_, i) => i + 1).filter((p) => !have.has(p));
 }

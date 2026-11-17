@@ -4,7 +4,10 @@ import { ErrorNote, Field, Loading, PageHeader, Spinner } from "../components/ui
 import { downloadBlob, exportAll } from "../lib/data";
 import { addDaysIso, formatDateTime, todayIso } from "../lib/dates";
 import { supabase } from "../lib/supabase";
-import type { RedactionTerm } from "../lib/types";
+import type { RedactionTerm, ReminderSettingsRow } from "../lib/types";
+import { ApiError, previewReminders, sendTestReminder, type ReminderPreview } from "../lib/api";
+import { DOCUMENTS_BUCKET } from "../lib/supabase";
+import { notifyChanged } from "../lib/events";
 import { must, useLoad } from "../lib/useLoad";
 import { useWs } from "../lib/workspace";
 
@@ -35,6 +38,8 @@ export default function SettingsPage() {
     <div className="mx-auto max-w-3xl space-y-5">
       <PageHeader title="Settings" subtitle="Your account, AI and privacy controls, and your data." />
       <AccountCard />
+      <RemindersCard />
+      <CalendarCard />
       <AiCard />
       <RedactionCard />
       <DataCard />
@@ -113,7 +118,7 @@ function AiCard() {
           : <>AI is <strong>off</strong>. Nothing about Sammy has been or will be sent to an AI provider until you accept below.</>}
       </div>
       <div className="space-y-3 text-sm text-stone-700">
-        <p><strong>Provider:</strong> Anthropic (Claude), model <code className="rounded bg-sand-100 px-1">{ai?.model ?? "claude-opus-5-5"}</code>, called only from this app's server. Your browser never holds the API key.</p>
+        <p><strong>Provider:</strong> Anthropic (Claude), model <code className="rounded bg-sand-100 px-1">{ai?.model ?? "claude-opus-5-5"}</code>, called only from this app's server. Your browser never holds the API key. If the AI declines a request, you're told so; it is never quietly sent to a different model.</p>
         <p><strong>What is sent:</strong> the item you're analysing or the question you ask, plus the relevant parts of Sammy's profile, timeline, actions, interventions and document passages needed to answer it. Names you list under "Redaction" are replaced with placeholders first, and email addresses and phone numbers are removed if that option is on.</p>
         <p><strong>How it's handled:</strong> under Anthropic's commercial terms, data sent through the API is not used to train its models by default, and is kept for a limited period for safety and abuse monitoring before deletion. Processing may take place outside the UK and EU. Terms change, so please read the current versions:</p>
         <ul className="list-disc pl-5">
@@ -217,6 +222,18 @@ function DataCard() {
           })}>Delete</button>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-sand-200 pt-4">
+          <div><p className="font-medium text-red-800">Delete everything</p><p className="text-stone-500">Every record, analysis, document and conversation, for both of you. Accounts stay. Export first.</p></div>
+          <button className="btn-danger" disabled={a.busy} onClick={() => a.run(async () => {
+            const typed = window.prompt('This permanently deletes all of Sammy\'s records for both parents. Type DELETE to confirm.');
+            if (typed !== "DELETE") return;
+            const docs = must(await supabase.from("documents").select("storage_path").eq("workspace_id", wsId)) as { storage_path: string }[];
+            for (let i = 0; i < docs.length; i += 100) await supabase.storage.from(DOCUMENTS_BUCKET).remove(docs.slice(i, i + 100).map((d) => d.storage_path));
+            must(await supabase.rpc("delete_all_records", { ws: wsId }));
+            notifyChanged();
+            return "Everything has been deleted.";
+          })}>Delete everything</button>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-sand-200 pt-4">
           <div><p className="font-medium">Clear change history older than 12 months</p><p className="text-stone-500">The history keeps earlier versions of edited or deleted records.</p></div>
           <button className="btn-danger" disabled={a.busy} onClick={() => a.run(async () => {
             if (!window.confirm("Permanently remove change history older than 12 months?")) return;
@@ -274,6 +291,128 @@ function HistoryCard() {
             ))}
           </ul>
         )}
+    </Card>
+  );
+}
+
+function RemindersCard() {
+  const { wsId, me, session } = useWs();
+  const { data, reload, loading } = useLoad(async () =>
+    must(await supabase.from("reminder_settings").select("*").eq("user_id", me!.user_id).maybeSingle()) as ReminderSettingsRow | null, [me?.user_id]);
+  const guessKey = (me?.display_name ?? "").toLowerCase().startsWith("helen") ? "helen" : (me?.display_name ?? "").toLowerCase().startsWith("ido") ? "ido" : null;
+  const [local, setLocal] = useState<ReminderSettingsRow | null>(null);
+  const current: ReminderSettingsRow = local ?? data ?? {
+    user_id: me!.user_id, workspace_id: wsId, enabled: false, email: null, owner_key: guessKey, scope: "mine",
+    due_soon_days: 2, overdue_repeat_days: 3, waiting_after_days: 7, include_titles: false,
+  };
+  const [preview, setPreview] = useState<ReminderPreview | null>(null);
+  const a = useAction();
+
+  // Optimistic: the control updates at once; a failed save puts it back.
+  const save = (patch: Partial<ReminderSettingsRow>) => {
+    const next = { ...current, ...patch };
+    setLocal(next);
+    return a.run(async () => {
+      try {
+        must(await supabase.from("reminder_settings").upsert(next));
+      } catch (e) {
+        setLocal(null);
+        throw e;
+      }
+      await reload();
+    });
+  };
+  const NumberSelect = ({ value, onChange, choices, suffix }: { value: number; onChange: (n: number) => void; choices: number[]; suffix: (n: number) => string }) => (
+    <select className="input !w-auto !py-1.5 text-sm" value={value} onChange={(e) => onChange(Number(e.target.value))}>
+      {choices.map((n) => <option key={n} value={n}>{suffix(n)}</option>)}
+    </select>
+  );
+
+  if (loading && !data) return <Card title="Email reminders"><Loading /></Card>;
+  return (
+    <Card title="Email reminders" icon={<Icon name="clock" className="h-5 w-5 text-sage-600" />}>
+      {a.error && <div className="mb-3"><ErrorNote message={a.error} /></div>}
+      <p className="mb-3 text-sm text-stone-600">At most one short email a day, only when something needs you. Emails just say what's due, with a link into the app — no details about Sammy unless you choose to include titles.</p>
+      <label className="flex items-center gap-2 text-sm font-medium text-stone-800">
+        <input type="checkbox" className="h-4 w-4 rounded border-sand-400 text-sage-600" checked={current.enabled} onChange={(e) => save({ enabled: e.target.checked })} />
+        Send me reminders
+      </label>
+      <div className={`mt-4 space-y-3 text-sm ${current.enabled ? "" : "pointer-events-none opacity-50"}`}>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Send to"><input className="input" type="email" defaultValue={current.email ?? ""} placeholder={session?.user.email ?? ""} onBlur={(e) => e.target.value !== (current.email ?? "") && save({ email: e.target.value.trim() || null })} /></Field>
+          <Field label="I am">
+            <select className="input" value={current.owner_key ?? ""} onChange={(e) => save({ owner_key: (e.target.value || null) as ReminderSettingsRow["owner_key"] })}>
+              <option value="">—</option><option value="ido">Ido</option><option value="helen">Helen</option>
+            </select>
+          </Field>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span>Remind me about</span>
+          <select className="input !w-auto !py-1.5 text-sm" value={current.scope} onChange={(e) => save({ scope: e.target.value as "mine" | "all" })}>
+            <option value="mine">my actions, shared ones, and replies we're waiting for</option>
+            <option value="all">everything</option>
+          </select>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span>Deadlines</span>
+          <NumberSelect value={current.due_soon_days} onChange={(n) => save({ due_soon_days: n })} choices={[0, 1, 2, 3, 5, 7]} suffix={(n) => (n === 0 ? "on the day" : `${n} day${n === 1 ? "" : "s"} before`)} />
+          <span>· overdue items every</span>
+          <NumberSelect value={current.overdue_repeat_days} onChange={(n) => save({ overdue_repeat_days: n })} choices={[1, 2, 3, 7, 14]} suffix={(n) => `${n} day${n === 1 ? "" : "s"}`} />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span>Chase replies after</span>
+          <NumberSelect value={current.waiting_after_days} onChange={(n) => save({ waiting_after_days: n })} choices={[3, 5, 7, 10, 14, 21]} suffix={(n) => `${n} days`} />
+        </div>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" className="h-4 w-4 rounded border-sand-400 text-sage-600" checked={current.include_titles} onChange={(e) => save({ include_titles: e.target.checked })} />
+          Include action titles in emails
+        </label>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2 border-t border-sand-200 pt-4">
+        <button className="btn-secondary btn-sm" disabled={a.busy} onClick={() => a.run(async () => { setPreview(await previewReminders()); })}>Preview today's email</button>
+        <button className="btn-ghost btn-sm" disabled={a.busy} onClick={() => a.run(async () => {
+          try {
+            const r = await sendTestReminder();
+            setPreview(r);
+            return r.sent ? `Sent to ${r.to}.` : r.message ?? "Nothing to send today.";
+          } catch (e) {
+            throw new Error(e instanceof ApiError && e.code === "email_not_configured" ? "Email sending hasn't been set up on the server yet (see the README)." : e instanceof Error ? e.message : String(e));
+          }
+        })}>Send me a test now</button>
+      </div>
+      {a.ok && <p className="mt-2 text-sm text-sage-800">{a.ok}</p>}
+      {preview && (
+        <div className="mt-3 rounded-xl bg-sand-100 p-3 text-sm">
+          {preview.items.length === 0 ? <p className="text-stone-600">Nothing would be sent today.</p> : (
+            <>
+              <p className="font-medium">{preview.email?.subject ?? `${preview.items.length} item(s)`}</p>
+              <ul className="mt-1 list-disc pl-5 text-stone-700">{preview.items.map((i) => <li key={i.action_id + i.reason}>{i.label}{current.include_titles ? `: ${i.title}` : ""}</li>)}</ul>
+            </>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function CalendarCard() {
+  const { wsId, workspace, refresh } = useWs();
+  const [text, setText] = useState(workspace.school_calendar ?? "");
+  const a = useAction();
+  return (
+    <Card title="School calendar">
+      <p className="mb-2 text-sm text-stone-600">Term dates help turn phrases like "before half-term" or "end of term" in school emails into real dates.</p>
+      <textarea className="input min-h-[90px]" value={text} onChange={(e) => setText(e.target.value)}
+        placeholder={"e.g.\nAutumn term ends: Fri 19 Dec 2026\nSpring term: Mon 5 Jan – Fri 27 Mar 2027\nHalf-term: 16–20 Feb 2027"} />
+      {a.error && <div className="mt-2"><ErrorNote message={a.error} /></div>}
+      <div className="mt-2 flex items-center justify-end gap-3">
+        {a.ok && <span className="text-sm text-sage-800">{a.ok}</span>}
+        <button className="btn-secondary btn-sm" disabled={a.busy || text === (workspace.school_calendar ?? "")} onClick={() => a.run(async () => {
+          must(await supabase.from("workspaces").update({ school_calendar: text.trim() || null }).eq("id", wsId));
+          await refresh();
+          return "Saved.";
+        })}>Save</button>
+      </div>
     </Card>
   );
 }

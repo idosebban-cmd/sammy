@@ -1,11 +1,15 @@
 import { useCallback, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { saveEntry } from "./Add";
+import { detectKind } from "../lib/detect";
+import { Spinner } from "../components/ui";
 import { ActionDetail, ActionEditor, ActionRow, setActionStatus } from "../components/actions";
 import { Icon } from "../components/Icon";
 import { ErrorNote, Loading } from "../components/ui";
 import { addDaysIso, daysFromToday, formatDate, todayIso } from "../lib/dates";
 import { notifyChanged, useOnChanged } from "../lib/events";
 import { EFFECT_LABELS, KIND_LABELS, TIMELINE_LABELS, TIMELINE_STYLES } from "../lib/labels";
+import { todayIso as today } from "../lib/dates";
 import { supabase } from "../lib/supabase";
 import type { Action, Entry, Intervention, Recommendation, TimelineEvent } from "../lib/types";
 import { must, useLoad } from "../lib/useLoad";
@@ -66,9 +70,16 @@ export default function HomePage() {
   if (loading && !data) return <Loading />;
   if (error || !data) return <ErrorNote message={error ?? "Couldn't load"} onRetry={reload} />;
 
-  const attention = data.open.filter((a) => a.due_date && daysFromToday(a.due_date) <= 7);
-  const undated = data.open.filter((a) => !a.due_date && a.priority === "high").slice(0, 3);
-  const upcomingActions = data.open.filter((a) => a.due_date && daysFromToday(a.due_date) > 7 && daysFromToday(a.due_date) <= 45);
+  const waitingDays = (a: Action) => -daysFromToday(a.status_changed_at.slice(0, 10));
+  const attentionGroups = [
+    { title: "Overdue", items: data.open.filter((a) => a.due_date && daysFromToday(a.due_date) < 0) },
+    { title: "This week", items: data.open.filter((a) => a.due_date && daysFromToday(a.due_date) >= 0 && daysFromToday(a.due_date) <= 7) },
+    { title: "Dates to confirm", items: data.open.filter((a) => (a.due_date && !a.date_confirmed && daysFromToday(a.due_date) > 7) || (!a.due_date && a.due_text)) },
+    { title: "Waiting for a reply", items: data.open.filter((a) => a.status === "waiting" && waitingDays(a) >= 7 && !(a.due_date && daysFromToday(a.due_date) <= 7)) },
+    { title: "Important, no date", items: data.open.filter((a) => !a.due_date && !a.due_text && a.priority === "high" && a.status !== "waiting").slice(0, 3) },
+  ].filter((g) => g.items.length);
+  // Appointments (e.g. annual reviews) are worth seeing further ahead than ordinary deadlines.
+  const upcomingActions = data.open.filter((a) => a.due_date && daysFromToday(a.due_date) > 7 && daysFromToday(a.due_date) <= (a.kind === "appointment" ? 120 : 60));
   const toReview = data.entries.filter((e) => e.analysis_status === "done" && e.review_status === "unreviewed");
   const positives = data.events.filter((e) => e.category === "positive").slice(0, 3);
   const challenges = data.events.filter((e) => e.category === "dysregulation" || e.category === "anxiety").slice(0, 3);
@@ -92,14 +103,7 @@ export default function HomePage() {
         </div>
       </div>
 
-      <Link to="/add" className="card group flex items-center gap-4 p-4 transition hover:border-sage-300 sm:p-5">
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-sage-600 text-white"><Icon name="plus" /></span>
-        <span className="flex-1">
-          <span className="block font-medium text-stone-900">Add something new</span>
-          <span className="block text-sm text-stone-500">Paste a school email, note how today went, upload a document or ask a question</span>
-        </span>
-        <Icon name="chevronRight" className="h-5 w-5 text-stone-400 group-hover:text-sage-600" />
-      </Link>
+      <QuickCapture />
 
       {isNew && (
         <section className="card p-5">
@@ -118,33 +122,41 @@ export default function HomePage() {
         <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
           <p className="text-sm font-medium text-amber-900">Waiting for your review</p>
           <ul className="mt-2 space-y-1">
-            {toReview.map((e) => (
+            {toReview.slice(0, 4).map((e) => (
               <li key={e.id}><Link to={`/entries/${e.id}`} className="text-sm text-amber-900 underline">{e.title || e.analysis?.what_happened.summary.slice(0, 80) || KIND_LABELS[e.kind]}</Link></li>
             ))}
           </ul>
+          {toReview.length > 4 && <p className="mt-1 text-xs text-amber-800">and {toReview.length - 4} more</p>}
         </section>
       )}
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
         <Panel title="Needs attention" link={{ to: "/actions", label: "All actions" }} className="lg:col-span-2">
-          {attention.length + undated.length === 0 ? (
-            <Quiet>Nothing overdue or due this week.</Quiet>
+          {attentionGroups.length === 0 ? (
+            <Quiet>Nothing overdue, due this week or waiting on anyone. </Quiet>
           ) : (
-            <div className="-mx-4 divide-y divide-sand-200 sm:-mx-5">
-              {[...attention, ...undated].map((a) => (
-                <ActionRow key={a.id} action={a} onOpen={() => setSelectedId(a.id)}
-                  onToggle={() => setActionStatus(wsId, a, "completed")} />
+            <div className="space-y-3">
+              {attentionGroups.map((g) => (
+                <div key={g.title}>
+                  <p className={`text-xs font-semibold uppercase tracking-wide ${g.title === "Overdue" ? "text-rose-700" : "text-stone-500"}`}>{g.title}</p>
+                  <div className="-mx-4 divide-y divide-sand-200 sm:-mx-5">
+                    {g.items.map((a) => (
+                      <ActionRow key={a.id} action={a} onOpen={() => setSelectedId(a.id)} onToggle={() => setActionStatus(wsId, a, "completed")} />
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           )}
         </Panel>
 
         <Panel title="Upcoming">
-          {data.upcoming.length + upcomingActions.length === 0 ? <Quiet>No appointments or deadlines in the next few weeks.</Quiet> : (
+          {data.upcoming.length + upcomingActions.length + data.open.filter((a) => a.kind === "appointment" && a.due_date && daysFromToday(a.due_date) >= 0).length === 0 ? <Quiet>No appointments or deadlines in the next few weeks.</Quiet> : (
             <ul className="space-y-3">
               {[
+                ...data.open.filter((a) => a.kind === "appointment" && a.due_date && daysFromToday(a.due_date) >= 0 && daysFromToday(a.due_date) <= 7).map((a) => ({ date: a.due_date!, key: `appt-${a.id}`, node: <button className="text-left hover:underline" onClick={() => setSelectedId(a.id)}>{a.title}</button>, kind: `Appointment${a.due_time ? ` · ${a.due_time.slice(0, 5)}` : ""}` })),
                 ...data.upcoming.map((e) => ({ date: e.occurred_on, key: e.id, node: <Link to={`/timeline?focus=${e.id}`} className="hover:underline">{e.title}</Link>, kind: TIMELINE_LABELS[e.category] })),
-                ...upcomingActions.map((a) => ({ date: a.due_date!, key: a.id, node: <button className="text-left hover:underline" onClick={() => setSelectedId(a.id)}>{a.title}</button>, kind: "Action deadline" })),
+                ...upcomingActions.map((a) => ({ date: a.due_date!, key: a.id, node: <button className="text-left hover:underline" onClick={() => setSelectedId(a.id)}>{a.title}</button>, kind: `${a.kind === "appointment" ? `Appointment${a.due_time ? ` · ${a.due_time.slice(0, 5)}` : ""}` : "Deadline"}${a.date_confirmed ? "" : " · date to confirm"}` })),
               ].sort((x, y) => x.date.localeCompare(y.date)).map((u) => (
                 <li key={u.key} className="flex gap-3">
                   <div className="w-12 shrink-0 rounded-lg bg-sand-100 py-1 text-center">
@@ -239,5 +251,56 @@ function EventLine({ e }: { e: TimelineEvent }) {
       <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${TIMELINE_STYLES[e.category].dot}`} />
       <span><span className="text-stone-800">{e.title}</span> <span className="text-xs text-stone-500">{formatDate(e.occurred_on)}</span></span>
     </Link>
+  );
+}
+
+function QuickCapture() {
+  const { wsId, aiEnabled, workspace } = useWs();
+  const navigate = useNavigate();
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const kind = detectKind(text);
+
+  const go = async (analyse: boolean) => {
+    if (!text.trim()) return navigate("/add");
+    if (kind === "question") return navigate(`/ask?q=${encodeURIComponent(text.trim())}`);
+    setBusy(true);
+    setError(null);
+    try {
+      const entry = await saveEntry(wsId, { kind, text, date: today() }, analyse && aiEnabled);
+      notifyChanged();
+      navigate(`/entries/${entry.id}${analyse && aiEnabled ? "?analyse=1" : ""}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card p-4 sm:p-5">
+      <label htmlFor="quick" className="mb-2 block font-medium text-stone-900">How was {workspace.child_name}'s day?</label>
+      <textarea id="quick" className="input min-h-[72px] resize-y" rows={2} value={text} onChange={(e) => setText(e.target.value)}
+        placeholder="A sentence or two is plenty — a good moment, a hard one, or paste an email. You can also ask a question." />
+      {error && <div className="mt-2"><ErrorNote message={error} /></div>}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex gap-3 text-xs text-stone-500">
+          <Link to="/add?kind=document" className="inline-flex items-center gap-1 hover:text-stone-800"><Icon name="upload" className="h-3.5 w-3.5" />Upload a document</Link>
+          {text.trim() && <span>{kind === "email" ? "Looks like an email" : kind === "question" ? "Looks like a question" : "Saved as an observation"}</span>}
+        </div>
+        <div className="flex gap-2">
+          {busy ? <Spinner className="h-5 w-5" /> : kind === "question" && text.trim() ? (
+            <button className="btn-primary" onClick={() => go(false)}><Icon name="chat" className="h-4 w-4" />Ask</button>
+          ) : (
+            <>
+              {text.trim() && <button className="btn-ghost" onClick={() => go(false)}>Just save</button>}
+              <button className="btn-primary" onClick={() => go(true)} disabled={!text.trim() && false}>
+                {aiEnabled ? <><Icon name="sparkles" className="h-4 w-4" />{text.trim() ? "Save & get advice" : "Add"}</> : text.trim() ? "Save" : "Add"}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
