@@ -1,0 +1,32 @@
+# Supabase CLI configuration (local development and `supabase link` / deploy).
+project_id = "sammy"
+
+[api]
+schemas = ["public"]
+max_rows = 1000
+
+[db]
+major_version = 16
+
+[auth]
+site_url = "http://localhost:5173"
+additional_redirect_urls = ["http://localhost:5173"]
+# Private app: no public sign-up. Accounts are created with scripts/bootstrap.mjs.
+enable_signup = false
+minimum_password_length = 12
+jwt_expiry = 3600
+enable_refresh_token_rotation = true
+
+[auth.email]
+enable_signup = false
+enable_confirmations = true
+secure_password_change = true
+
+[storage]
+file_size_limit = "25MiB"
+
+[functions.analyze]
+verify_jwt = true
+
+[functions.assistant]
+verify_jwt = true
